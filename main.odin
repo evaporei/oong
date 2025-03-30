@@ -1,6 +1,7 @@
 package oong
 
 import "base:runtime"
+import "core:c"
 import "core:fmt"
 import "core:math"
 import "core:slice"
@@ -17,6 +18,42 @@ clay_error_handler :: proc "c" (error_data: clay.ErrorData) {
 	fmt.println("clay_error_handler:", error_data)
 }
 
+measureText :: proc "c" (
+    text: clay.StringSlice,
+    config: ^clay.TextElementConfig,
+    userData: rawptr,
+) -> clay.Dimensions {
+    context = runtime.default_context()
+
+    maxTextWidth: f32 = 0
+    lineTextWidth: f32 = 0
+
+    textHeight := cast(f32)config.fontSize
+
+    str := string(text.chars[:text.length])
+    // load_missing_codepoints(&g_state.renderer, str, int(config.fontId))
+
+    for codepoint, _ in str {
+        if (codepoint == '\n') {
+            maxTextWidth = max(maxTextWidth, lineTextWidth)
+            lineTextWidth = 0
+            continue
+        }
+
+        index := rl.GetGlyphIndex(font^, codepoint)
+
+        if (font.glyphs[index].advanceX != 0) {
+            lineTextWidth += cast(f32)font.glyphs[index].advanceX
+        } else {
+            lineTextWidth += (font.recs[index].width + cast(f32)font.glyphs[index].offsetX)
+        }
+    }
+
+    maxTextWidth = max(maxTextWidth, lineTextWidth)
+
+    return {maxTextWidth, textHeight}
+}
+
 clay_measure_text :: proc "c" (
 	text: clay.StringSlice,
 	config: ^clay.TextElementConfig,
@@ -24,35 +61,44 @@ clay_measure_text :: proc "c" (
 ) -> (
 	text_size: clay.Dimensions,
 ) {
-	max_text_width, line_text_width: f32
+	text_size = {
+            width = c.float(text.length * i32(config.fontSize)), // <- this will only work for monospace fonts, see the renderers/ directory for more advanced text measurement
+            height = c.float(config.fontSize)
+    }
 
-	text_height := f32(config.fontSize)
-	font_to_use := rl.GetFontDefault()
-
-	for i in 0 ..< int(text.length) {
-		if text.chars[i] == '\n' {
-			max_text_width = max(max_text_width, line_text_width)
-			line_text_width = 0
-			continue
-		}
-		index := i32(text.chars[i] - 32)
-		if font_to_use.glyphs[index].advanceX != 0 {
-			line_text_width += f32(font_to_use.glyphs[index].advanceX)
-		} else {
-			line_text_width +=
-				(font_to_use.recs[index].width + f32(font_to_use.glyphs[index].offsetX))
-		}
-	}
-
-	max_text_width = max(max_text_width, line_text_width)
-
-	text_size.width = max_text_width / 2
-	text_size.height = text_height
+	// max_text_width, line_text_width: f32
+    //
+	// text_height := f32(config.fontSize)
+	// font_to_use := font
+    //
+	// for i in 0 ..< int(text.length) {
+	// 	if text.chars[i] == '\n' {
+	// 		max_text_width = max(max_text_width, line_text_width)
+	// 		line_text_width = 0
+	// 		continue
+	// 	}
+	// 	index := i32(text.chars[i] - 32)
+	// 	if font_to_use.glyphs[index].advanceX != 0 {
+	// 		line_text_width += f32(font_to_use.glyphs[index].advanceX)
+	// 	} else {
+	// 		line_text_width +=
+	// 			(font_to_use.recs[index].width + f32(font_to_use.glyphs[index].offsetX))
+	// 	}
+	// }
+    //
+	// max_text_width = max(max_text_width, line_text_width)
+    //
+	// text_size.width = max_text_width / 2
+	// text_size.height = text_height
 
 	return
 }
 
 GAME_WIDTH, GAME_HEIGHT :: 1920, 1080
+FONT_SIZE :: 50
+FONT_SPACING :: 2
+
+font: ^rl.Font
 
 main :: proc() {
 	rl.SetTraceLogLevel(.ERROR)
@@ -65,12 +111,19 @@ main :: proc() {
 		clay.Dimensions{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())},
 		clay.ErrorHandler{handler = clay_error_handler},
 	)
-	clay.SetMeasureTextFunction(clay_measure_text, nil)
+	clay.SetMeasureTextFunction(measureText, nil)
 
 	// NOTE(eva): idk if we want this helps at all
 	rl.SetConfigFlags({.VSYNC_HINT, .WINDOW_HIGHDPI, .MSAA_4X_HINT})
 	rl.InitWindow(GAME_WIDTH, GAME_HEIGHT, "oong")
 	defer rl.CloseWindow()
+
+	// font = rl.LoadFont("Roboto Regular.ttf")
+	font = new(rl.Font)
+	font^ = rl.LoadFontEx("Roboto Regular.ttf", FONT_SIZE, nil, 0)
+	rl.SetTextureFilter(font^.texture, rl.TextureFilter.TRILINEAR)
+
+	// font = rl.LoadFont("font.ttf")
 
 	clay_debug_mode := false
 
@@ -96,20 +149,36 @@ main :: proc() {
 		if clay.UI()({
 			id = clay.ID("Game"),
 			layout = {
-				layoutDirection = .LeftToRight,
+				layoutDirection = .TopToBottom,
 				sizing = {clay.SizingGrow({}), clay.SizingGrow({})},
+				childAlignment = clay.ChildAlignment{x = .Center},
 			},
 			backgroundColor = rl_to_clay_color(rl.BLACK),
 		}) {
+			if clay.UI()({
+				id = clay.ID("DebugTextRectangle"),
+				// layout = {
+				// 	childAlignment = clay.ChildAlignment{x = .Center},
+				// },
+				backgroundColor = rl_to_clay_color(rl.RED),
+			}) {
+				clay.Text("oong", clay.TextConfig({
+					fontSize = FONT_SIZE,
+					letterSpacing = FONT_SPACING,
+					textColor = rl_to_clay_color(rl.WHITE),
+					textAlignment = .Center,
+				}))
+			}
 		}
+
+		render_cmds := clay.EndLayout()
 
 		rl.BeginDrawing()
 		defer rl.EndDrawing()
 
-		render_cmds := clay.EndLayout()
 		clay_rl_render(&render_cmds)
 
-		rl.DrawFPS(0, 0)
+		// rl.DrawFPS(0, 0)
 	}
 }
 
@@ -127,7 +196,7 @@ clay_rl_render :: proc(
 ) {
 	for i in 0 ..< int(render_cmds.length) {
 		render_cmd := clay.RenderCommandArray_Get(render_cmds, cast(i32)i)
-		fmt.println(render_cmd)
+		// fmt.println(render_cmd)
 		bounding_box := render_cmd.boundingBox
 		switch (render_cmd.commandType) {
 		case .None:
@@ -137,7 +206,7 @@ clay_rl_render :: proc(
 			// Raylib uses standard C strings so isn't compatible with cheap slices, we need to clone the string to append null terminator
 			text := string(config.stringContents.chars[:config.stringContents.length])
 			cloned := strings.clone_to_cstring(text, allocator)
-			font_to_use := rl.GetFontDefault()
+			font_to_use := font^
 			rl.DrawTextEx(
 				font_to_use,
 				cloned,
