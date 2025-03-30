@@ -18,7 +18,7 @@ clay_error_handler :: proc "c" (error_data: clay.ErrorData) {
 	fmt.println("clay_error_handler:", error_data)
 }
 
-measureText :: proc "c" (
+clay_measure_text :: proc "c" (
     text: clay.StringSlice,
     config: ^clay.TextElementConfig,
     userData: rawptr,
@@ -35,6 +35,10 @@ measureText :: proc "c" (
 
     for codepoint, _ in str {
         if (codepoint == '\n') {
+            // remove spacing after last character
+            if lineTextWidth > 0 {
+                lineTextWidth -= f32(config.letterSpacing)
+            }
             maxTextWidth = max(maxTextWidth, lineTextWidth)
             lineTextWidth = 0
             continue
@@ -47,51 +51,17 @@ measureText :: proc "c" (
         } else {
             lineTextWidth += (font.recs[index].width + cast(f32)font.glyphs[index].offsetX)
         }
+        lineTextWidth += f32(config.letterSpacing)
+    }
+
+    // remove spacing after last character
+    if lineTextWidth > 0 {
+        lineTextWidth -= f32(config.letterSpacing)
     }
 
     maxTextWidth = max(maxTextWidth, lineTextWidth)
 
     return {maxTextWidth, textHeight}
-}
-
-clay_measure_text :: proc "c" (
-	text: clay.StringSlice,
-	config: ^clay.TextElementConfig,
-	user_data: rawptr,
-) -> (
-	text_size: clay.Dimensions,
-) {
-	text_size = {
-            width = c.float(text.length * i32(config.fontSize)), // <- this will only work for monospace fonts, see the renderers/ directory for more advanced text measurement
-            height = c.float(config.fontSize)
-    }
-
-	// max_text_width, line_text_width: f32
-    //
-	// text_height := f32(config.fontSize)
-	// font_to_use := font
-    //
-	// for i in 0 ..< int(text.length) {
-	// 	if text.chars[i] == '\n' {
-	// 		max_text_width = max(max_text_width, line_text_width)
-	// 		line_text_width = 0
-	// 		continue
-	// 	}
-	// 	index := i32(text.chars[i] - 32)
-	// 	if font_to_use.glyphs[index].advanceX != 0 {
-	// 		line_text_width += f32(font_to_use.glyphs[index].advanceX)
-	// 	} else {
-	// 		line_text_width +=
-	// 			(font_to_use.recs[index].width + f32(font_to_use.glyphs[index].offsetX))
-	// 	}
-	// }
-    //
-	// max_text_width = max(max_text_width, line_text_width)
-    //
-	// text_size.width = max_text_width / 2
-	// text_size.height = text_height
-
-	return
 }
 
 GAME_WIDTH, GAME_HEIGHT :: 1920, 1080
@@ -111,7 +81,7 @@ main :: proc() {
 		clay.Dimensions{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())},
 		clay.ErrorHandler{handler = clay_error_handler},
 	)
-	clay.SetMeasureTextFunction(measureText, nil)
+	clay.SetMeasureTextFunction(clay_measure_text, nil)
 
 	// NOTE(eva): idk if we want this helps at all
 	rl.SetConfigFlags({.VSYNC_HINT, .WINDOW_HIGHDPI, .MSAA_4X_HINT})
